@@ -891,7 +891,9 @@ export const getSuperDashboard = createServerFn({ method: "GET" })
     const sql = await getSql();
     await ensureSeeded(sql);
     const tenants = await sql.query<SqlRow>(
-      `select t.*, p.name_en as plan_name, tmpl.name_en as template_name
+      `select t.*, p.name_en as plan_name, tmpl.name_en as template_name,
+        (select count(*)::int from orders o where o.tenant_id = t.id) as orders_count,
+        (select count(*)::int from members m where m.tenant_id = t.id) as members_count
        from tenants t join plans p on p.id = t.plan_id join templates tmpl on tmpl.id = t.template_id
        order by t.created_at desc`,
     );
@@ -946,6 +948,17 @@ export const updateTenantStatus = createServerFn({ method: "POST" })
     const sql = await getSql();
     await sql.query("update tenants set status = $1 where id = $2", [data.status, data.id]);
     await audit(context.userId, data.id, "tenant.status", "tenant", data.id);
+    return { ok: true };
+  });
+
+export const assignPlan = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ tenantId: z.string(), planId: z.string() }))
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    await sql.query("update tenants set plan_id = $1 where id = $2", [data.planId, data.tenantId]);
+    await audit(context.userId, data.tenantId, "plan.change", "tenant", data.tenantId);
     return { ok: true };
   });
 
