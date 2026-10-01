@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 const NAV: { to: string; key: UiKey }[] = [
   { to: "/admin", key: "dashboard" },
   { to: "/admin/tenants", key: "tenants" },
+  { to: "/admin/users", key: "users" },
   { to: "/admin/templates", key: "templates" },
   { to: "/admin/plans", key: "plans" },
   { to: "/admin/support", key: "support" },
@@ -46,14 +47,28 @@ export function AdminShell() {
           <AuthSlot />
         </div>
       </header>
+      <nav className="flex gap-2 overflow-x-auto border-b border-border bg-surface px-3 py-2 md:hidden">
+        {NAV.map((item) => (
+          <Link
+            key={item.to}
+            to={item.to}
+            className={cn(
+              "shrink-0 rounded-[length:var(--radius-sm)] px-4 py-2 text-sm text-muted",
+              pathname === item.to && "bg-primary text-primary-fg",
+            )}
+          >
+            {tr(locale, item.key)}
+          </Link>
+        ))}
+      </nav>
       <div className="mx-auto flex max-w-7xl">
-        <aside className="hidden w-48 border-e border-border p-3 md:block">
+        <aside className="hidden w-52 border-e border-border p-3 md:block">
           {NAV.map((item) => (
             <Link
               key={item.to}
               to={item.to}
               className={cn(
-                "block rounded-[length:var(--radius-sm)] px-3 py-2 text-sm text-muted hover:bg-elevated",
+                "block rounded-[length:var(--radius-sm)] px-4 py-3 text-base text-muted hover:bg-elevated",
                 pathname === item.to && "bg-primary text-primary-fg",
               )}
             >

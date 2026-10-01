@@ -1412,3 +1412,153 @@ export const deleteBranch = createServerFn({ method: "POST" })
     await audit(context.userId, tenantId, "branch.delete", "branch", data.id);
     return { ok: true };
   });
+
+// ─────────────────── platform clients & users (super admin only) ───────────────────
+
+const MEMBER_ROLES = ["TENANT_OWNER", "TENANT_ADMIN", "BRANCH_MANAGER", "STAFF"] as const;
+
+export const createTenant = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      name: z.string().trim().min(2).max(80),
+      nameAr: z.string().trim().max(80).optional(),
+      slug: z.string().trim().toLowerCase(),
+      templateId: z.string().min(1),
+      planId: z.string().min(1),
+      ownerEmail: z.string().trim().toLowerCase().optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    if (!isSlug(data.slug)) fail("Invalid slug: use a-z, 0-9 and dashes only");
+    const sql = await getSql();
+    const taken = await sql.query<SqlRow>("select id from tenants where slug = $1", [data.slug]);
+    if (taken.length) fail("This slug is already used", 409);
+    const tmpl = (await sql.query<SqlRow>("select industry from templates where id = $1", [data.templateId]))[0];
+    if (!tmpl) fail("Unknown template");
+    const plan = (await sql.query<SqlRow>("select id from plans where id = $1", [data.planId]))[0];
+    if (!plan) fail("Unknown plan");
+
+    const id = newId("tn");
+    const prefix = data.slug.replace(/[^a-z0-9]/g, "").slice(0, 3).toUpperCase() || "ORD";
+    await sql.query(
+      "insert into tenants (id, slug, name, status, template_id, plan_id, industry) values ($1,$2,$3,'trial',$4,$5,$6)",
+      [id, data.slug, data.name, data.templateId, data.planId, String(tmpl.industry ?? "restaurant")],
+    );
+    await sql.query(
+      "insert into subscriptions (id, tenant_id, plan_id, status) values ($1,$2,$3,'TRIAL')",
+      [newId("sub"), id, data.planId],
+    );
+    await sql.query(
+      `insert into business_profiles (tenant_id, name_en, name_ar, order_prefix) values ($1,$2,$3,$4)`,
+      [id, data.name, data.nameAr || data.name, prefix],
+    );
+    await sql.query("insert into order_counters (tenant_id, last_seq) values ($1, 0) on conflict do nothing", [id]);
+
+    let ownerLinked = false;
+    if (data.ownerEmail) {
+      const u = (await sql.query<SqlRow>('select id from "user" where lower("email") = $1', [data.ownerEmail]))[0];
+      if (u) {
+        await sql.query("insert into members (id, user_id, tenant_id, role) values ($1,$2,$3,'TENANT_OWNER')", [
+          newId("mem"),
+          String(u.id),
+          id,
+        ]);
+        ownerLinked = true;
+      }
+    }
+    await audit(context.userId, id, "tenant.create", "tenant", id);
+    return { id, ownerLinked };
+  });
+
+export const listUsers = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const users = await sql.query<SqlRow>(
+      'select "id", "name", "email", "createdAt" as created_at from "user" order by "createdAt" desc limit 500',
+    );
+    const members = await sql.query<SqlRow>(
+      `select m.id, m.user_id, m.tenant_id, m.role, t.name as tenant_name
+       from members m left join tenants t on t.id = m.tenant_id`,
+    );
+    const tenants = await sql.query<SqlRow>("select id, name from tenants order by name");
+    return { users, members, tenants };
+  });
+
+export const createUserAccount = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      name: z.string().trim().min(2).max(80),
+      email: z.string().trim().toLowerCase().email(),
+      password: z.string().min(8).max(100),
+      tenantId: z.string().optional(),
+      role: z.enum(MEMBER_ROLES).optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const { auth } = await import("@/lib/auth/server");
+    const authCtx = await auth.$context;
+    const existing = await authCtx.internalAdapter.findUserByEmail(data.email);
+    if (existing) fail("This email is already registered", 409);
+    const hash = await authCtx.password.hash(data.password);
+    const user = await authCtx.internalAdapter.createUser({ email: data.email, name: data.name, emailVerified: true });
+    await authCtx.internalAdapter.linkAccount({
+      userId: user.id,
+      providerId: "credential",
+      accountId: user.id,
+      password: hash,
+    });
+    const sql = await getSql();
+    if (data.tenantId) {
+      const t = (await sql.query<SqlRow>("select id from tenants where id = $1", [data.tenantId]))[0];
+      if (!t) fail("Unknown tenant");
+      await sql.query("insert into members (id, user_id, tenant_id, role) values ($1,$2,$3,$4)", [
+        newId("mem"),
+        user.id,
+        data.tenantId,
+        data.role ?? "STAFF",
+      ]);
+    }
+    await audit(context.userId, data.tenantId ?? null, "user.create", "user", user.id);
+    return { id: user.id };
+  });
+
+export const addMemberToTenant = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ userId: z.string(), tenantId: z.string(), role: z.enum(MEMBER_ROLES) }))
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const dup = await sql.query<SqlRow>("select id from members where user_id = $1 and tenant_id = $2", [
+      data.userId,
+      data.tenantId,
+    ]);
+    if (dup.length) fail("User already belongs to this client", 409);
+    await sql.query("insert into members (id, user_id, tenant_id, role) values ($1,$2,$3,$4)", [
+      newId("mem"),
+      data.userId,
+      data.tenantId,
+      data.role,
+    ]);
+    await audit(context.userId, data.tenantId, "member.add", "user", data.userId);
+    return { ok: true };
+  });
+
+export const removeMemberById = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ memberId: z.string() }))
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const row = (await sql.query<SqlRow>("select user_id, tenant_id, role from members where id = $1", [data.memberId]))[0];
+    if (!row) fail("Not found", 404);
+    if (String(row.role) === "SUPER_ADMIN") fail("Cannot remove a platform admin here", 403);
+    await sql.query("delete from members where id = $1", [data.memberId]);
+    await audit(context.userId, row.tenant_id ? String(row.tenant_id) : null, "member.remove", "user", String(row.user_id));
+    return { ok: true };
+  });

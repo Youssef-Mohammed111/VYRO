@@ -1,27 +1,55 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { listTemplates } from "@/lib/vyro/admin";
+import { getSuperDashboard, listTemplates } from "@/lib/vyro/admin";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { t, useLocale } from "@/lib/vyro/locale";
 
 export const Route = createFileRoute("/admin/templates")({
-  loader: () => listTemplates(),
+  loader: async () => {
+    const [templates, dash] = await Promise.all([listTemplates(), getSuperDashboard()]);
+    return { templates, tenants: dash.tenants };
+  },
   component: Page,
 });
 
+type Row = Record<string, unknown>;
+
 function Page() {
-  const templates = Route.useLoaderData() as Record<string, unknown>[];
+  const { templates, tenants } = Route.useLoaderData();
+  const locale = useLocale((s) => s.locale);
   return (
     <div className="space-y-4">
-      <h1 className="font-display text-3xl">Templates</h1>
-      <p className="text-sm text-muted">Tenants receive a family. They do not edit layout or animation rules.</p>
+      <h1 className="font-display text-3xl">{t(locale, "القوالب", "Templates")}</h1>
+      <p className="text-sm text-muted">
+        {t(
+          locale,
+          "كل عميل بياخد قالب جاهز، ومبيقدرش يعدّل التصميم. غيّر قالب العميل من صفحة العملاء.",
+          "Each client gets a ready template and cannot edit the layout. Change a client's template from Clients.",
+        )}
+      </p>
       <div className="grid gap-3 md:grid-cols-2">
-        {templates.map((t) => (
-          <Card key={String(t.id)}>
-            <p className="font-display text-xl">{String(t.name_en)}</p>
-            <p className="text-xs text-muted">{String(t.industry)} · v{String(t.version)}</p>
-            <Badge className="mt-2">{String(t.status)}</Badge>
-          </Card>
-        ))}
+        {(templates as Row[]).map((tm) => {
+          const id = String(tm.id);
+          const users = (tenants as Row[]).filter((tn) => String(tn.template_id) === id);
+          return (
+            <Card key={id} className="space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-display text-xl">{t(locale, String(tm.name_ar), String(tm.name_en))}</p>
+                  <p className="text-xs text-muted">
+                    {String(tm.industry)} · v{String(tm.version)}
+                  </p>
+                </div>
+                <Badge>{String(tm.status)}</Badge>
+              </div>
+              <p className="text-sm text-muted">
+                {users.length === 0
+                  ? t(locale, "مفيش عملاء بيستخدموه", "No clients use it")
+                  : `${t(locale, "مستخدم عند", "Used by")}: ${users.map((u) => String(u.name)).join("، ")}`}
+              </p>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
