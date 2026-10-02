@@ -1,4 +1,5 @@
 import { createFileRoute, getRouteApi, notFound, useNavigate } from "@tanstack/react-router";
+import { presetFor } from "@/lib/vyro/presets";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { t, useLocale } from "@/lib/vyro/locale";
@@ -130,9 +131,25 @@ function Product() {
             {total} {tenant.profile.currency}
           </p>
         </div>
-        <Button className="w-full" disabled={!item.available} onClick={addToCart}>
-          {item.available ? t(locale, "أضف إلى السلة", "Add to cart") : t(locale, "غير متاح حالياً", "Currently unavailable")}
-        </Button>
+        {presetFor(tenant.templateFamily).kind === "showcase" ? (
+          <Button asChild className="w-full">
+            <a
+              href={`https://wa.me/${(tenant.profile.whatsapp || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                `${t(locale, "أرغب في الاستفسار عن:", "I'd like to ask about:")} ${t(locale, item.nameAr, item.nameEn)}`,
+              )}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {t(locale, presetFor(tenant.templateFamily).addAr, presetFor(tenant.templateFamily).addEn)}
+            </a>
+          </Button>
+        ) : (
+          <Button className="w-full" disabled={!item.available} onClick={addToCart}>
+            {item.available
+              ? t(locale, presetFor(tenant.templateFamily).addAr, presetFor(tenant.templateFamily).addEn)
+              : t(locale, "غير متاح حالياً", "Currently unavailable")}
+          </Button>
+        )}
       </div>
     </div>
   );

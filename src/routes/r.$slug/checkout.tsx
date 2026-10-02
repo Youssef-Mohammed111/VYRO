@@ -1,4 +1,5 @@
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
+import { presetFor } from "@/lib/vyro/presets";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { t, useLocale } from "@/lib/vyro/locale";
@@ -26,6 +27,7 @@ function Checkout() {
   // Dine-in only makes sense when the customer scanned a table QR; otherwise start on pickup.
   const [fulfillment, setFulfillment] = useState<"dine_in" | "pickup" | "delivery">(table ? "dine_in" : "pickup");
   const [busy, setBusy] = useState(false);
+  const isService = presetFor(tenant.templateFamily).kind === "service";
   const key = useMemo(() => publicToken(16), []);
   // The fee comes from the business's settings; the server recomputes it anyway.
   const deliveryFee = fulfillment === "delivery" ? tenant.profile.deliveryFee : 0;
@@ -65,7 +67,15 @@ function Checkout() {
           tableNumber: fulfillment === "dine_in" ? table || String(fd.get("table") || "") || undefined : undefined,
           fulfillment,
           address: fulfillment === "delivery" ? String(fd.get("address") || "") || undefined : undefined,
-          notes: String(fd.get("notes") || "") || undefined,
+          notes:
+            [
+              isService && fd.get("when")
+                ? `${locale === "ar" ? "الميعاد المفضل" : "Preferred time"}: ${String(fd.get("when"))}`
+                : "",
+              String(fd.get("notes") || ""),
+            ]
+              .filter(Boolean)
+              .join("\n") || undefined,
           paymentMethodId: method.id,
           lines: lines.map((l) => ({
             itemId: l.itemId,
@@ -103,7 +113,7 @@ function Checkout() {
 
   return (
     <form className="space-y-4 p-4" onSubmit={onSubmit}>
-      <h1 className="font-display text-3xl">{t(locale, "إتمام الطلب", "Checkout")}</h1>
+      <h1 className="font-display text-3xl">{isService ? t(locale, "تأكيد الحجز", "Confirm booking") : t(locale, "إتمام الطلب", "Checkout")}</h1>
       <Card className="space-y-3 p-4">
         <Field id="name" label={t(locale, "الاسم", "Name")} required />
         <Field id="phone" label={t(locale, "الهاتف", "Phone")} required type="tel" />
@@ -115,7 +125,8 @@ function Checkout() {
         ) : (
           fulfillment === "dine_in" ? <Field id="table" label={t(locale, "رقم الطاولة", "Table number")} required /> : null
         )}
-        <div className="flex gap-2">
+        {isService ? <Field id="when" label={t(locale, "الميعاد المفضل (اليوم والساعة)", "Preferred date and time")} required type="datetime-local" /> : null}
+        <div className={isService ? "hidden" : "flex gap-2"}>
           {(["dine_in", "pickup", "delivery"] as const).map((f) => (
             <button
               key={f}

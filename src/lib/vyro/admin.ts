@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { presetFor } from "@/lib/vyro/presets";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { loadMembers } from "./session";
@@ -1435,7 +1436,7 @@ export const createTenant = createServerFn({ method: "POST" })
     const sql = await getSql();
     const taken = await sql.query<SqlRow>("select id from tenants where slug = $1", [data.slug]);
     if (taken.length) fail("This slug is already used", 409);
-    const tmpl = (await sql.query<SqlRow>("select industry from templates where id = $1", [data.templateId]))[0];
+    const tmpl = (await sql.query<SqlRow>("select industry, family from templates where id = $1", [data.templateId]))[0];
     if (!tmpl) fail("Unknown template");
     const plan = (await sql.query<SqlRow>("select id from plans where id = $1", [data.planId]))[0];
     if (!plan) fail("Unknown plan");
@@ -1455,6 +1456,41 @@ export const createTenant = createServerFn({ method: "POST" })
       [id, data.name, data.nameAr || data.name, prefix],
     );
     await sql.query("insert into order_counters (tenant_id, last_seq) values ($1, 0) on conflict do nothing", [id]);
+
+    // Starter catalogue so a new client never opens an empty storefront.
+    const preset = presetFor(String(tmpl.family ?? ""));
+    const catIds = new Map<string, string>();
+    let order = 0;
+    for (const c of preset.cats) {
+      const cid = newId("cat");
+      catIds.set(c.slug, cid);
+      await sql.query(
+        "insert into categories (id, tenant_id, slug, name_en, name_ar, sort_order) values ($1,$2,$3,$4,$5,$6)",
+        [cid, id, c.slug, c.en, c.ar, order++],
+      );
+    }
+    order = 0;
+    for (const it of preset.items) {
+      await sql.query(
+        `insert into catalog_items (id, tenant_id, category_id, slug, kind, name_en, name_ar, desc_en, desc_ar, price, compare_at, featured, sort_order)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          newId("itm"),
+          id,
+          catIds.get(it.cat) ?? null,
+          it.slug,
+          preset.itemKind,
+          it.en,
+          it.ar,
+          it.descEn,
+          it.descAr,
+          it.price,
+          it.compareAt ?? null,
+          Boolean(it.featured),
+          order++,
+        ],
+      );
+    }
 
     let ownerLinked = false;
     if (data.ownerEmail) {

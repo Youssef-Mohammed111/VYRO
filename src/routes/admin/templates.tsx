@@ -3,6 +3,7 @@ import { getSuperDashboard, listTemplates } from "@/lib/vyro/admin";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { t, useLocale } from "@/lib/vyro/locale";
+import { presetFor } from "@/lib/vyro/presets";
 
 export const Route = createFileRoute("/admin/templates")({
   loader: async () => {
@@ -31,6 +32,7 @@ function Page() {
         {(templates as Row[]).map((tm) => {
           const id = String(tm.id);
           const users = (tenants as Row[]).filter((tn) => String(tn.template_id) === id);
+          const pr = presetFor(String(tm.family));
           return (
             <Card key={id} className="space-y-2">
               <div className="flex items-start justify-between gap-2">
@@ -40,8 +42,11 @@ function Page() {
                     {String(tm.industry)} · v{String(tm.version)}
                   </p>
                 </div>
-                <Badge>{String(tm.status)}</Badge>
+                <Badge>{t(locale, presetFor(String(tm.family)).labelAr, presetFor(String(tm.family)).labelEn)}</Badge>
               </div>
+              <p className="text-sm text-muted">
+                {t(locale, `يبدأ بـ ${pr.items.length} عنصر تجريبي في ${pr.cats.length} أقسام · زرار: ${pr.ctaAr}`, `Starts with ${pr.items.length} sample items in ${pr.cats.length} categories · CTA: ${pr.ctaEn}`)}
+              </p>
               <p className="text-sm text-muted">
                 {users.length === 0
                   ? t(locale, "مفيش عملاء بيستخدموه", "No clients use it")

@@ -83,6 +83,9 @@ async function seedOnce(sql: Sql) {
     { id: "tmpl_auto", slug: "auto-service", name_en: "Auto Service", name_ar: "خدمة سيارات", industry: "auto", family: "auto" },
     { id: "tmpl_hotel", slug: "hospitality", name_en: "Hospitality", name_ar: "ضيافة", industry: "hotel", family: "hotel" },
     { id: "tmpl_pro", slug: "professional", name_en: "Professional Services", name_ar: "خدمات مهنية", industry: "professional", family: "professional" },
+    { id: "tmpl_restaurant", slug: "restaurant-classic", name_en: "Restaurant Classic", name_ar: "مطعم كلاسيك", industry: "restaurant", family: "restaurant" },
+    { id: "tmpl_supermarket", slug: "supermarket-fresh", name_en: "Supermarket Fresh", name_ar: "سوبر ماركت", industry: "retail", family: "supermarket" },
+    { id: "tmpl_realestate", slug: "real-estate", name_en: "Real Estate", name_ar: "عقارات", industry: "realestate", family: "realestate" },
   ];
   for (const t of templates) {
     await insert(sql, "templates", {

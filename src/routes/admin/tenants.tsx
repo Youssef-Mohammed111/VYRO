@@ -151,7 +151,7 @@ function Page() {
                 >
                   {(templates as Row[]).map((tm) => (
                     <option key={String(tm.id)} value={String(tm.id)}>
-                      {String(tm.name_en)}
+                      {t(locale, String(tm.name_ar), String(tm.name_en))}
                     </option>
                   ))}
                 </select>

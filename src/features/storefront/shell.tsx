@@ -1,4 +1,5 @@
 import { Link, Outlet, useParams } from "@tanstack/react-router";
+import { presetFor, themeVars } from "@/lib/vyro/presets";
 import { Phone, ShoppingBag } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PublicTenant } from "@/lib/vyro/types";
@@ -39,9 +40,13 @@ export function StorefrontShell({ tenant, table }: { tenant: PublicTenant; table
   const rpm = tenant.templateFamily === "restaurant-performance";
   // Tenant brand color (validated hex only) overrides the template's primary.
   const brand = tenant.profile.branding?.primary;
-  const themeStyle = isHexColor(brand ?? "")
-    ? ({ "--color-primary": brand, "--color-ring": brand, "--color-primary-fg": contrastText(brand!) } as React.CSSProperties)
-    : undefined;
+  const preset = presetFor(tenant.templateFamily);
+  const themeStyle = {
+    ...(preset.theme ? themeVars(preset.theme) : {}),
+    ...(isHexColor(brand ?? "")
+      ? { "--color-primary": brand, "--color-ring": brand, "--color-primary-fg": contrastText(brand!) }
+      : {}),
+  } as React.CSSProperties;
   // Computed after mount so server and client HTML agree (no hydration mismatch on the clock).
   const [open, setOpen] = useState<boolean | null>(null);
   useEffect(() => {
@@ -94,7 +99,7 @@ export function StorefrontShell({ tenant, table }: { tenant: PublicTenant; table
         </div>
       ) : open === false ? (
         <div className="bg-elevated py-1.5 text-center text-xs text-muted">
-          {t(locale, "مغلق الآن — يمكنك تصفح المنيو", "Closed right now — you can still browse the menu")}
+          {t(locale, `مغلق الآن — يمكنك تصفح ${preset.catalogAr}`, `Closed right now — you can still browse ${preset.catalogEn}`)}
         </div>
       ) : null}
       <header className="border-b border-border">
@@ -133,7 +138,7 @@ export function StorefrontShell({ tenant, table }: { tenant: PublicTenant; table
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur">
         <div className="mx-auto grid max-w-lg grid-cols-5 text-[11px] text-muted">
           <Tab to="/r/$slug" slug={slug} label={t(locale, "الرئيسية", "Home")} />
-          <Tab to="/r/$slug/menu" slug={slug} label={t(locale, "المنيو", "Menu")} />
+          <Tab to="/r/$slug/menu" slug={slug} label={t(locale, preset.catalogAr, preset.catalogEn)} />
           <Tab to="/r/$slug/offers" slug={slug} label={t(locale, "العروض", "Offers")} />
           <Tab to="/r/$slug/location" slug={slug} label={t(locale, "الموقع", "Location")} />
           <Tab to="/r/$slug/about" slug={slug} label={t(locale, "عنا", "About")} />
