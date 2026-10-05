@@ -165,6 +165,7 @@ export const ui = {
   admin: { ar: "إدارة المنصة", en: "Admin" },
   tenants: { ar: "العملاء", en: "Clients" },
   users: { ar: "المستخدمون", en: "Users" },
+  subscriptions: { ar: "الاشتراكات", en: "Subscriptions" },
   templates: { ar: "القوالب", en: "Templates" },
   plans: { ar: "الباقات", en: "Plans" },
   auditLogs: { ar: "سجل المراجعة", en: "Audit logs" },

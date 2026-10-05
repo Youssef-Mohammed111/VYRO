@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 const NAV: { to: string; key: UiKey }[] = [
   { to: "/admin", key: "dashboard" },
   { to: "/admin/tenants", key: "tenants" },
+  { to: "/admin/subscriptions", key: "subscriptions" },
   { to: "/admin/users", key: "users" },
   { to: "/admin/templates", key: "templates" },
   { to: "/admin/plans", key: "plans" },

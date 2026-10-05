@@ -1598,3 +1598,197 @@ export const removeMemberById = createServerFn({ method: "POST" })
     await audit(context.userId, row.tenant_id ? String(row.tenant_id) : null, "member.remove", "user", String(row.user_id));
     return { ok: true };
   });
+
+// ─────────────────── subscriptions & billing (super admin only) ───────────────────
+
+const PAY_METHODS = ["cash", "instapay", "vodafone_cash", "bank", "card", "other"] as const;
+
+/** Latest subscription row for a tenant (creating a trial row when none exists). */
+async function ensureSubscription(tenantId: string): Promise<string> {
+  const sql = await getSql();
+  const row = (
+    await sql.query<SqlRow>("select id from subscriptions where tenant_id = $1 order by start_at desc limit 1", [tenantId])
+  )[0];
+  if (row) return String(row.id);
+  const t = (await sql.query<SqlRow>("select plan_id from tenants where id = $1", [tenantId]))[0];
+  if (!t) fail("Unknown client", 404);
+  const id = newId("sub");
+  await sql.query("insert into subscriptions (id, tenant_id, plan_id, status) values ($1,$2,$3,'TRIAL')", [
+    id,
+    tenantId,
+    String(t.plan_id),
+  ]);
+  return id;
+}
+
+export const listSubscriptions = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const rows = await sql.query<SqlRow>(
+      `select t.id, t.name, t.slug, t.status as tenant_status, t.plan_id,
+              p.name_en as plan_name, p.name_ar as plan_name_ar, p.price_monthly, p.price_yearly,
+              s.id as sub_id, upper(s.status) as sub_status, s.billing_cycle, s.start_at, s.end_at, s.note,
+              (select max(o.created_at) from orders o where o.tenant_id = t.id) as last_order_at,
+              (select count(*)::int from orders o where o.tenant_id = t.id and o.created_at > now() - interval '30 days') as orders_30d,
+              (select count(*)::int from members m where m.tenant_id = t.id) as members_count,
+              (select max(sp.created_at) from subscription_payments sp where sp.tenant_id = t.id) as last_payment_at,
+              (select coalesce(sum(sp.amount),0)::int from subscription_payments sp where sp.tenant_id = t.id) as paid_total
+       from tenants t
+       join plans p on p.id = t.plan_id
+       left join lateral (select * from subscriptions s2 where s2.tenant_id = t.id order by s2.start_at desc limit 1) s on true
+       where t.status <> 'archived'
+       order by t.created_at desc`,
+    );
+    const payments = await sql.query<SqlRow>(
+      `select sp.id, sp.amount, sp.method, sp.reference, sp.months, sp.note, sp.created_at, t.name as tenant_name
+       from subscription_payments sp join tenants t on t.id = sp.tenant_id
+       order by sp.created_at desc limit 15`,
+    );
+    const month = await sql.query<{ total: number }>(
+      "select coalesce(sum(amount),0)::int as total from subscription_payments where created_at >= date_trunc('month', now())",
+    );
+    return { rows, payments, collectedThisMonth: Number(month[0]?.total ?? 0) };
+  });
+
+export const subscriptionAction = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      tenantId: z.string(),
+      action: z.enum(["activate", "suspend", "cancel", "extend", "trial"]),
+      months: z.number().int().min(1).max(36).optional(),
+      days: z.number().int().min(1).max(365).optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const tn = (await sql.query<SqlRow>("select status from tenants where id = $1", [data.tenantId]))[0];
+    if (!tn) fail("Unknown client", 404);
+    if (String(tn.status) === "archived") fail("Client is archived", 409);
+    const subId = await ensureSubscription(data.tenantId);
+
+    if (data.action === "suspend" || data.action === "cancel") {
+      await sql.query("update subscriptions set status = $1, updated_at = now() where id = $2", [
+        data.action === "suspend" ? "SUSPENDED" : "CANCELLED",
+        subId,
+      ]);
+      await sql.query("update tenants set status = 'suspended' where id = $1", [data.tenantId]);
+    } else {
+      const months = data.months ?? 0;
+      const days = data.days ?? 0;
+      const status = data.action === "trial" ? "TRIAL" : "ACTIVE";
+      if (data.action === "trial") {
+        await sql.query(
+          "update subscriptions set status = 'TRIAL', end_at = now() + make_interval(days => $1::int), updated_at = now() where id = $2",
+          [days || 14, subId],
+        );
+      } else if (months > 0 || days > 0 || data.action === "extend") {
+        await sql.query(
+          `update subscriptions set status = 'ACTIVE',
+             end_at = greatest(coalesce(end_at, now()), now()) + make_interval(months => $1::int, days => $2::int),
+             updated_at = now() where id = $3`,
+          [months, days, subId],
+        );
+      } else {
+        // plain activation: keep a running period, open-ended subscriptions stay open-ended
+        await sql.query("update subscriptions set status = $1, updated_at = now() where id = $2", [status, subId]);
+      }
+      await sql.query("update tenants set status = 'active' where id = $1", [data.tenantId]);
+    }
+    await audit(context.userId, data.tenantId, `subscription.${data.action}`, "subscription", subId, {
+      months: data.months ?? null,
+      days: data.days ?? null,
+    });
+    return { ok: true };
+  });
+
+export const recordPayment = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      tenantId: z.string(),
+      amount: z.number().int().min(1).max(100000000),
+      method: z.enum(PAY_METHODS),
+      reference: z.string().trim().max(120).optional(),
+      months: z.number().int().min(0).max(36).optional(),
+      note: z.string().trim().max(300).optional(),
+    }),
+  )
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const tn = (await sql.query<SqlRow>("select status from tenants where id = $1", [data.tenantId]))[0];
+    if (!tn) fail("Unknown client", 404);
+    const subId = await ensureSubscription(data.tenantId);
+    await sql.query(
+      `insert into subscription_payments (id, tenant_id, subscription_id, amount, method, reference, months, note, recorded_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        newId("pay"),
+        data.tenantId,
+        subId,
+        data.amount,
+        data.method,
+        data.reference || null,
+        data.months || null,
+        data.note || null,
+        context.userId,
+      ],
+    );
+    if (data.months && data.months > 0 && String(tn.status) !== "archived") {
+      await sql.query(
+        `update subscriptions set status = 'ACTIVE',
+           end_at = greatest(coalesce(end_at, now()), now()) + make_interval(months => $1::int),
+           updated_at = now() where id = $2`,
+        [data.months, subId],
+      );
+      await sql.query("update tenants set status = 'active' where id = $1", [data.tenantId]);
+    }
+    await audit(context.userId, data.tenantId, "payment.record", "subscription", subId, {
+      amount: data.amount,
+      method: data.method,
+      months: data.months ?? null,
+    });
+    return { ok: true };
+  });
+
+export const updatePlanPrices = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ planId: z.string(), priceMonthly: z.number().int().min(0).max(10000000), priceYearly: z.number().int().min(0).max(100000000) }))
+  .handler(async ({ context, data }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    await sql.query("update plans set price_monthly = $1, price_yearly = $2 where id = $3", [
+      data.priceMonthly,
+      data.priceYearly,
+      data.planId,
+    ]);
+    await audit(context.userId, null, "plan.prices", "plan", data.planId, {
+      monthly: data.priceMonthly,
+      yearly: data.priceYearly,
+    });
+    return { ok: true };
+  });
+
+export const suspendExpired = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    await requireSuper(context.userId);
+    const sql = await getSql();
+    const due = await sql.query<SqlRow>(
+      `select t.id as tenant_id, s.id as sub_id
+       from tenants t
+       join lateral (select * from subscriptions s2 where s2.tenant_id = t.id order by s2.start_at desc limit 1) s on true
+       where t.status in ('active','trial') and s.end_at is not null and s.end_at < now()
+         and upper(s.status) in ('ACTIVE','TRIAL')`,
+    );
+    for (const r of due) {
+      await sql.query("update subscriptions set status = 'EXPIRED', updated_at = now() where id = $1", [String(r.sub_id)]);
+      await sql.query("update tenants set status = 'suspended' where id = $1", [String(r.tenant_id)]);
+      await audit(context.userId, String(r.tenant_id), "subscription.expired", "subscription", String(r.sub_id));
+    }
+    return { suspended: due.length };
+  });
